@@ -7,7 +7,7 @@ from deep_translator import GoogleTranslator
 from typing import Dict, List
 
 # Initialize OpenRouter client
-OPENROUTER_API_KEY = "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"
+OPENROUTER_API_KEY = "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"
 llama_model = ChatOpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=OPENROUTER_API_KEY,
