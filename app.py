@@ -1,12 +1,12 @@
 import streamlit as st
 from langchain_openai import ChatOpenAI
-from langchain_community.tools import DuckDuckGoSearchResults
+from langchain_community.tools import DuckDuckGoSearchRun
 from langchain_community.utilities import DuckDuckGoSearchAPIWrapper
 import json
 from deep_translator import GoogleTranslator
 from typing import Dict, List
-import ast
-from tenacity import retry, stop_after_attempt, wait_fixed
+import time
+from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
 
 # Initialize OpenRouter client
 OPENROUTER_API_KEY = st.secrets["OPENROUTER_API_KEY"]
@@ -17,9 +17,9 @@ llama_model = ChatOpenAI(
     temperature=0.5,
 )
 
-# Initialize DuckDuckGo search tool
+# Initialize DuckDuckGo search tool - using SearchRun for lighter requests
 wrapper = DuckDuckGoSearchAPIWrapper(max_results=5)
-web_search_tool = DuckDuckGoSearchResults(api_wrapper=wrapper)
+web_search_tool = DuckDuckGoSearchRun(api_wrapper=wrapper)
 
 # Translation setup
 translator_en = GoogleTranslator(source='de', target='en')
@@ -117,22 +117,23 @@ def generate_search_query(user_profile: Dict, prompt: str, lang: str) -> str:
         st.error(f"{get_ui_texts(lang)['error_openrouter']} Error: {e}")
         return f"{prompt} in {user_profile['city']}"
 
-@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def search_web(query: str, lang: str) -> List[Dict]:
-    """Search DuckDuckGo using LangChain's DuckDuckGoSearchResults with retry."""
+    """Search DuckDuckGo using LangChain's DuckDuckGoSearchRun with exponential backoff."""
     try:
         results_str = web_search_tool.invoke(query)
-        # Parse the string representation of list of lists into list of dicts
-        # Expected format: "[snippet: ...,title:...,link:...],[snippet: ...,title:...,link:...]"
-        parsed_results = ast.literal_eval(results_str)
-        formatted_results = []
-        for snippet, title, link in parsed_results:
-            formatted_results.append({
-                "title": title,
-                "href": link,
-                "body": snippet
-            })
-        return formatted_results
+        # Parse results string: Typically "Title\nSnippet\nURL\n\nTitle\nSnippet\nURL\n..."
+        parsed_results = []
+        blocks = results_str.split('\n\n')[:5]  # Split into blocks, limit to 5
+        for block in blocks:
+            lines = block.split('\n')
+            if len(lines) >= 3:
+                title = lines[0].strip()
+                body = lines[1].strip()
+                href = lines[2].strip() if len(lines) > 2 else ""
+                if title:
+                    parsed_results.append({"title": title[:50] + "..." if len(title) > 50 else title, "href": href, "body": body})
+        return parsed_results
     except Exception as e:
         st.error(f"{get_ui_texts(lang)['error_search']} Error: {e}")
         raise  # Re-raise for retry
@@ -234,8 +235,14 @@ def main():
                     search_query = generate_search_query(st.session_state.profile, prompt, lang)
                     st.info(f"🔍 Refined Query: {search_query}")
 
-                    # Step 2: Web search with retry
-                    results = search_web(search_query, lang)
+                    # Step 2: Web search with retry, catch to prevent crash
+                    results = []
+                    try:
+                        results = search_web(search_query, lang)
+                    except RetryError:
+                        st.error("Search service is temporarily unavailable due to rate limits. Please try again in a few minutes.")
+                    except Exception as e:
+                        st.error(f"Unexpected search error: {e}")
 
                     # Step 3: Summarize
                     if results:
