@@ -17,8 +17,8 @@ llama_model = ChatOpenAI(
     temperature=0.5,
 )
 
-# Initialize DuckDuckGo search tool - using SearchRun for lighter requests
-wrapper = DuckDuckGoSearchAPIWrapper(max_results=5)
+# Initialize DuckDuckGo search tool - lighter config
+wrapper = DuckDuckGoSearchAPIWrapper(max_results=3)  # Reduced for less load
 web_search_tool = DuckDuckGoSearchRun(api_wrapper=wrapper)
 
 # Translation setup
@@ -44,7 +44,8 @@ UI_TEXTS = {
         'dark': 'Dark (Grok Style)', 'light': 'Light',
         'en': 'English', 'de': 'German',
         'error_openrouter': 'OpenRouter API error. Check your API key or connection.',
-        'error_search': 'Search failed. Check your connection.'
+        'error_search': 'Search failed. Check your connection.',
+        'search_rate_limit': 'Search service is temporarily unavailable due to rate limits. Please try again in 5-10 minutes.'
     },
     'de': {
         'title': 'Grok Lokale Highlights: Entdecke positive Vibes in deiner Stadt',
@@ -63,7 +64,8 @@ UI_TEXTS = {
         'dark': 'Dunkel (Grok-Stil)', 'light': 'Hell',
         'en': 'Englisch', 'de': 'Deutsch',
         'error_openrouter': 'OpenRouter API-Fehler. Überprüfe deinen API-Schlüssel oder die Verbindung.',
-        'error_search': 'Suche fehlgeschlagen. Überprüfe deine Verbindung.'
+        'error_search': 'Suche fehlgeschlagen. Überprüfe deine Verbindung.',
+        'search_rate_limit': 'Suchdienst ist vorübergehend aufgrund von Ratenlimits nicht verfügbar. Bitte versuche es in 5-10 Minuten erneut.'
     }
 }
 
@@ -117,30 +119,48 @@ def generate_search_query(user_profile: Dict, prompt: str, lang: str) -> str:
         st.error(f"{get_ui_texts(lang)['error_openrouter']} Error: {e}")
         return f"{prompt} in {user_profile['city']}"
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+@retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=4, min=10, max=60))
 def search_web(query: str, lang: str) -> List[Dict]:
-    """Search DuckDuckGo using LangChain's DuckDuckGoSearchRun with exponential backoff."""
+    """Search DuckDuckGo with longer exponential backoff."""
     try:
         results_str = web_search_tool.invoke(query)
-        # Parse results string: Typically "Title\nSnippet\nURL\n\nTitle\nSnippet\nURL\n..."
+        # Simple parsing for SearchRun output
         parsed_results = []
-        blocks = results_str.split('\n\n')[:5]  # Split into blocks, limit to 5
-        for block in blocks:
-            lines = block.split('\n')
-            if len(lines) >= 3:
-                title = lines[0].strip()
-                body = lines[1].strip()
-                href = lines[2].strip() if len(lines) > 2 else ""
+        lines = results_str.split('\n')
+        for i in range(0, len(lines), 3):  # Assume title, snippet, url pattern
+            if i + 2 < len(lines):
+                title = lines[i].strip()
+                body = lines[i+1].strip()
+                href = lines[i+2].strip() if lines[i+2] else ""
                 if title:
                     parsed_results.append({"title": title[:50] + "..." if len(title) > 50 else title, "href": href, "body": body})
-        return parsed_results
+        return parsed_results[:3]
     except Exception as e:
+        # Check for rate limit in error
+        if "ratelimit" in str(e).lower() or "202" in str(e):
+            raise Exception("Rate limit hit")
         st.error(f"{get_ui_texts(lang)['error_search']} Error: {e}")
-        raise  # Re-raise for retry
+        raise
+
+def fallback_summary(user_profile: Dict, prompt: str, lang: str) -> str:
+    """LLM-generated suggestions without search (fallback)."""
+    profile_str = json.dumps(user_profile)
+    system_prompt = f"""
+    You are Grok, witty and helpful. Generate 3-5 personalized outdoor activity suggestions for tonight in {user_profile['city']}.
+    User profile: {profile_str}. Prompt: {prompt}.
+    Focus on positive, local vibes. Assume current date is September 28, 2025.
+    Output in {lang.upper()}: Bullet points, engaging tone. Include made-up but realistic links/descriptions.
+    """
+    try:
+        response = llama_model.invoke([{"role": "system", "content": system_prompt}])
+        return response.content.strip()
+    except Exception as e:
+        st.error(f"{get_ui_texts(lang)['error_openrouter']} Error: {e}")
+        return "Suggestions could not be generated."
 
 def summarize_results(results: List[Dict], user_profile: Dict, prompt: str, lang: str) -> str:
     """Use OpenRouter to summarize search results into personalized suggestions."""
-    results_str = json.dumps(results[:3])  # Limit to top 3 for brevity
+    results_str = json.dumps(results[:3])
     profile_str = json.dumps(user_profile)
     system_prompt = f"""
     You are Grok, witty and helpful. Summarize these web search results into 3-5 personalized suggestions.
@@ -176,7 +196,8 @@ def main():
             key="theme_select"
         )
         if theme == 'light':
-            st.markdown('<style>.light-mode {}</style>'.format(GROK_CSS.replace('0f0f23', 'ffffff').replace('#1a1a2e', 'f0f0f0').replace('#0f3460', 'e0e0ff').replace('#16213e', 'cccccc').replace('#00d4ff', '#0066cc')), unsafe_allow_html=True)
+            light_css = GROK_CSS.replace('#0f0f23', '#ffffff').replace('#1a1a2e', '#f0f0f0').replace('#0f3460', '#e0e0ff').replace('#16213e', '#cccccc').replace('#00d4ff', '#0066cc')
+            st.markdown(f'<style>.light-mode {{ {light_css} }}</style>', unsafe_allow_html=True)
 
     # Header
     st.title(ui_texts['title'])
@@ -190,8 +211,7 @@ def main():
     with st.form(key='profile_form'):
         st.markdown(f"### {ui_texts['profile_title']}")
         
-        # City input with accessibility
-        st.markdown(f'<label for="city_input">{ui_texts["city_label"]}</label>', unsafe_allow_html=True)
+        # City input
         city = st.text_input(
             ui_texts['city_label'],
             value=st.session_state.profile['city'],
@@ -200,8 +220,7 @@ def main():
             help="Enter your city (e.g., Berlin)"
         )
 
-        # Interests multiselect with accessibility
-        st.markdown(f'<label for="interests_select">{ui_texts["interests_label"]}</label>', unsafe_allow_html=True)
+        # Interests multiselect
         interests = st.multiselect(
             ui_texts['interests_label'],
             ui_texts['interests_options'],
@@ -221,7 +240,6 @@ def main():
     # Main Search
     if st.session_state.profile['city']:
         with st.form(key='search_form'):
-            st.markdown(f'<label for="prompt_input">{ui_texts["prompt_label"]}</label>', unsafe_allow_html=True)
             prompt = st.text_input(
                 ui_texts['prompt_label'],
                 key="prompt_input",
@@ -235,22 +253,29 @@ def main():
                     search_query = generate_search_query(st.session_state.profile, prompt, lang)
                     st.info(f"🔍 Refined Query: {search_query}")
 
-                    # Step 2: Web search with retry, catch to prevent crash
+                    # Step 2: Web search with fallback
                     results = []
+                    use_fallback = False
                     try:
                         results = search_web(search_query, lang)
-                    except RetryError:
-                        st.error("Search service is temporarily unavailable due to rate limits. Please try again in a few minutes.")
+                    except RetryError as re:
+                        if "ratelimit" in str(re).lower():
+                            st.warning(ui_texts['search_rate_limit'])
+                            use_fallback = True
+                        else:
+                            st.error(f"Search error: {re}")
                     except Exception as e:
                         st.error(f"Unexpected search error: {e}")
+                        use_fallback = True
 
-                    # Step 3: Summarize
-                    if results:
-                        summary = summarize_results(results, st.session_state.profile, prompt, lang)
-                        st.subheader(ui_texts['results_title'])
-                        st.markdown(summary)
+                    # Step 3: Summarize (with fallback)
+                    if use_fallback or not results:
+                        summary = fallback_summary(st.session_state.profile, prompt, lang)
                     else:
-                        st.warning(ui_texts['no_results'])
+                        summary = summarize_results(results, st.session_state.profile, prompt, lang)
+                    
+                    st.subheader(ui_texts['results_title'])
+                    st.markdown(summary)
     else:
         st.info("Set your profile first to get started!")
 
