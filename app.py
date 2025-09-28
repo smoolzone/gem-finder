@@ -28,7 +28,7 @@ translator_de = GoogleTranslator(source='en', target='de')
 # Default UI texts
 UI_TEXTS = {
     'en': {
-        'title': 'Grok Local Goodies: Discover Positive Vibes by City',
+        'title': 'Local Goodies: Discover Positive Vibes by City',
         'subtitle': 'Find restaurants, concerts, pubs, gatherings & more tailored to you.',
         'profile_title': 'Your Profile',
         'city_label': 'Your City',
@@ -48,7 +48,7 @@ UI_TEXTS = {
         'search_rate_limit': 'Search service is temporarily unavailable due to rate limits. Please try again in 5-10 minutes.'
     },
     'de': {
-        'title': 'Grok Lokale Highlights: Entdecke positive Vibes in deiner Stadt',
+        'title': 'Lokale Highlights: Entdecke positive Vibes in deiner Stadt',
         'subtitle': 'Finde Restaurants, Konzerte, Pubs, Treffen & mehr, maßgeschneidert für dich.',
         'profile_title': 'Dein Profil',
         'city_label': 'Deine Stadt',
