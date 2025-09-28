@@ -1,10 +1,12 @@
 import streamlit as st
 from langchain_openai import ChatOpenAI
-from langchain_community.tools import DuckDuckGoSearchRun
+from langchain_community.tools import DuckDuckGoSearchResults
 from langchain_community.utilities import DuckDuckGoSearchAPIWrapper
 import json
 from deep_translator import GoogleTranslator
 from typing import Dict, List
+import ast
+from tenacity import retry, stop_after_attempt, wait_fixed
 
 # Initialize OpenRouter client
 OPENROUTER_API_KEY = st.secrets["OPENROUTER_API_KEY"]
@@ -16,8 +18,8 @@ llama_model = ChatOpenAI(
 )
 
 # Initialize DuckDuckGo search tool
-wrapper = DuckDuckGoSearchAPIWrapper(max_results=5)  # Adjusted to match previous behavior
-web_search_tool = DuckDuckGoSearchRun(api_wrapper=wrapper)
+wrapper = DuckDuckGoSearchAPIWrapper(max_results=5)
+web_search_tool = DuckDuckGoSearchResults(api_wrapper=wrapper)
 
 # Translation setup
 translator_en = GoogleTranslator(source='de', target='en')
@@ -115,20 +117,25 @@ def generate_search_query(user_profile: Dict, prompt: str, lang: str) -> str:
         st.error(f"{get_ui_texts(lang)['error_openrouter']} Error: {e}")
         return f"{prompt} in {user_profile['city']}"
 
-def search_web(query: str) -> List[Dict]:
-    """Search DuckDuckGo using LangChain's DuckDuckGoSearchRun."""
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
+def search_web(query: str, lang: str) -> List[Dict]:
+    """Search DuckDuckGo using LangChain's DuckDuckGoSearchResults with retry."""
     try:
-        results = web_search_tool.invoke(query)
-        # Parse results (DuckDuckGoSearchRun returns a string, so we need to convert to list of dicts)
-        # This is a simplified parsing; actual results may need more processing
-        parsed_results = []
-        for result in results.split('\n')[:5]:  # Limit to 5 results
-            if result.strip():
-                parsed_results.append({"title": result[:50] + "...", "href": "", "body": result})
-        return parsed_results
+        results_str = web_search_tool.invoke(query)
+        # Parse the string representation of list of lists into list of dicts
+        # Expected format: "[snippet: ...,title:...,link:...],[snippet: ...,title:...,link:...]"
+        parsed_results = ast.literal_eval(results_str)
+        formatted_results = []
+        for snippet, title, link in parsed_results:
+            formatted_results.append({
+                "title": title,
+                "href": link,
+                "body": snippet
+            })
+        return formatted_results
     except Exception as e:
         st.error(f"{get_ui_texts(lang)['error_search']} Error: {e}")
-        return []
+        raise  # Re-raise for retry
 
 def summarize_results(results: List[Dict], user_profile: Dict, prompt: str, lang: str) -> str:
     """Use OpenRouter to summarize search results into personalized suggestions."""
@@ -185,7 +192,7 @@ def main():
         # City input with accessibility
         st.markdown(f'<label for="city_input">{ui_texts["city_label"]}</label>', unsafe_allow_html=True)
         city = st.text_input(
-            "",
+            ui_texts['city_label'],
             value=st.session_state.profile['city'],
             key="city_input",
             placeholder=ui_texts['city_label'],
@@ -195,7 +202,7 @@ def main():
         # Interests multiselect with accessibility
         st.markdown(f'<label for="interests_select">{ui_texts["interests_label"]}</label>', unsafe_allow_html=True)
         interests = st.multiselect(
-            "",
+            ui_texts['interests_label'],
             ui_texts['interests_options'],
             default=st.session_state.profile['interests'],
             key="interests_select",
@@ -215,7 +222,7 @@ def main():
         with st.form(key='search_form'):
             st.markdown(f'<label for="prompt_input">{ui_texts["prompt_label"]}</label>', unsafe_allow_html=True)
             prompt = st.text_input(
-                "",
+                ui_texts['prompt_label'],
                 key="prompt_input",
                 placeholder=ui_texts['prompt_label'],
                 help="Enter what you're in the mood for (e.g., cozy dinner spot)"
@@ -227,8 +234,8 @@ def main():
                     search_query = generate_search_query(st.session_state.profile, prompt, lang)
                     st.info(f"🔍 Refined Query: {search_query}")
 
-                    # Step 2: Web search
-                    results = search_web(search_query)
+                    # Step 2: Web search with retry
+                    results = search_web(search_query, lang)
 
                     # Step 3: Summarize
                     if results:
