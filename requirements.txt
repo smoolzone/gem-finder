@@ -4,7 +4,8 @@ langchain-community==0.3.1
 deep-translator==1.11.4
 duckduckgo_search==7.5.5
 python-dateutil==2.9.0
-tenacity>=8.1.0,<9.0.0  # Loosened: Avoids 9.0.0 and 8.4.0 conflicts
+tenacity>=8.1.0,<9.0.0
 requests==2.32.3
-openai==1.51.2
-rich==13.7.1  # Pinned <14 for Streamlit compatibility
+openai==1.40.0  # Downgraded for compatibility
+rich==13.7.1
+httpx==0.27.2  # Added for explicit HTTP client
