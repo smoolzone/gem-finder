@@ -42,7 +42,7 @@ UI_TEXTS = {
         'no_results': 'No suggestions found. Try a different prompt!',
         'mode_toggle': 'Theme',
         'lang_toggle': 'Language',
-        'dark': 'Dark (Grok Style)', 'light': 'Light',
+        'dark': 'Dark', 'light': 'Light',
         'en': 'English', 'de': 'German',
         'error_openrouter': 'OpenRouter API error. Check your API key or connection.',
         'error_search': 'Search failed. Check your connection.',
