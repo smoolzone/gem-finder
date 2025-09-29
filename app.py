@@ -263,7 +263,7 @@ def main():
                             st.warning(ui_texts['search_rate_limit'])
                             use_fallback = True
                         else:
-                            st.error(f"Search error: {re}")
+                            st.warning(f"Search error: {re}")
                     except Exception as e:
                         st.error(f"Unexpected search error: {e}")
                         use_fallback = True
