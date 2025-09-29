@@ -9,7 +9,8 @@ import time
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
 
 # Initialize OpenRouter client
-OPENROUTER_API_KEY = st.secrets["OPENROUTER_API_KEY"]
+OPENROUTER_API_KEY = st.secrets["OPENROUTER_API_KEY"] 
+
 llama_model = ChatOpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=OPENROUTER_API_KEY,
@@ -145,11 +146,12 @@ def search_web(query: str, lang: str) -> List[Dict]:
 def fallback_summary(user_profile: Dict, prompt: str, lang: str) -> str:
     """LLM-generated suggestions without search (fallback)."""
     profile_str = json.dumps(user_profile)
+    language_full = 'English' if lang == 'en' else 'German'
     system_prompt = f"""
     You are Grok, witty and helpful. Generate 3-5 personalized outdoor activity suggestions for tonight in {user_profile['city']}.
     User profile: {profile_str}. Prompt: {prompt}.
     Focus on positive, local vibes. Assume current date is September 28, 2025.
-    Output in {lang.upper()}: Bullet points, engaging tone. Include made-up but realistic links/descriptions.
+    Output in {language_full}: Bullet points, engaging tone. Include made-up but realistic links/descriptions.
     """
     try:
         response = llama_model.invoke([{"role": "system", "content": system_prompt}])
@@ -160,13 +162,14 @@ def fallback_summary(user_profile: Dict, prompt: str, lang: str) -> str:
 
 def summarize_results(results: List[Dict], user_profile: Dict, prompt: str, lang: str) -> str:
     """Use OpenRouter to summarize search results into personalized suggestions."""
-    results_str = json.dumps(results[:3])
+    results_str = json.dumps(results[:3])  # Limit to top 3 for brevity
     profile_str = json.dumps(user_profile)
+    language_full = 'English' if lang == 'en' else 'German'
     system_prompt = f"""
     You are Grok, witty and helpful. Summarize these web search results into 3-5 personalized suggestions.
     User profile: {profile_str}. Prompt: {prompt}.
     Focus on positive, local vibes (restaurants, concerts, etc.). Include links, brief descriptions.
-    Output in {lang.upper()}: Bullet points, engaging tone.
+    Output in {language_full}: Bullet points, engaging tone.
     """
     try:
         response = llama_model.invoke([{"role": "system", "content": system_prompt + "\nResults: " + results_str}])
@@ -178,7 +181,6 @@ def summarize_results(results: List[Dict], user_profile: Dict, prompt: str, lang
 # Streamlit App
 def main():
     st.set_page_config(page_title="Grok Local Goodies", layout="wide")
-    st.markdown(GROK_CSS, unsafe_allow_html=True)
 
     # Sidebar for toggles
     with st.sidebar:
@@ -189,15 +191,38 @@ def main():
             key="lang_select"
         )
         ui_texts = get_ui_texts(lang)
+
+        # Detect language change and translate interests
+        interests_map = {
+            'en_to_de': {
+                'Restaurants': 'Restaurants',
+                'Concerts': 'Konzerte',
+                'Pubs': 'Pubs',
+                'Gatherings': 'Treffen',
+                'Events': 'Events',
+                'Outdoor Activities': 'Outdoor-Aktivitäten'
+            }
+        }
+        interests_map['de_to_en'] = {v: k for k, v in interests_map['en_to_de'].items()}
+        if 'previous_lang' not in st.session_state:
+            st.session_state.previous_lang = lang
+        if st.session_state.previous_lang != lang:
+            direction = 'en_to_de' if lang == 'de' else 'de_to_en'
+            st.session_state.profile['interests'] = [interests_map[direction].get(i, i) for i in st.session_state.profile['interests']]
+            st.session_state.previous_lang = lang
+
         theme = st.selectbox(
             ui_texts['mode_toggle'],
             ['dark', 'light'],
             format_func=lambda x: ui_texts[x],
             key="theme_select"
         )
-        if theme == 'light':
-            light_css = GROK_CSS.replace('#0f0f23', '#ffffff').replace('#1a1a2e', '#f0f0f0').replace('#0f3460', '#e0e0ff').replace('#16213e', '#cccccc').replace('#00d4ff', '#0066cc')
-            st.markdown(f'<style>.light-mode {{ {light_css} }}</style>', unsafe_allow_html=True)
+
+    # Apply theme CSS
+    css = GROK_CSS
+    if theme == 'light':
+        css = GROK_CSS.replace('#0f0f23', '#ffffff').replace('#1a1a2e', '#f0f0f0').replace('#0f3460', '#e0e0ff').replace('#16213e', '#cccccc').replace('#00d4ff', '#0066cc')
+    st.markdown(css, unsafe_allow_html=True)
 
     # Header
     st.title(ui_texts['title'])
